@@ -1,0 +1,2 @@
+# mkinitrd
+initrd generator
