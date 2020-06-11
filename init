@@ -1,0 +1,177 @@
+#!/bin/sh
+
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+shell() {
+	setsid sh -c 'exec sh </dev/tty1 >/dev/tty1 2>&1'
+}
+
+problem() {
+	printf "Encountered a problem!\n\nDropping you to a shell.\n\n"
+	shell
+}
+
+msg() {
+	echo ":: $*"
+}
+
+no_device() {
+	printf "The device %s, which is supposed to contain the\n" $1
+	printf "root file system, does not exist.\n"
+	printf "Please fix this problem and exit this shell.\n\n"
+}
+
+no_mount() {
+	printf "Could not mount device %s\n" $1
+	printf "Sleeping forever. Please reboot and fix the kernel command line.\n\n"
+	printf "Maybe the device is formatted with an unsupported file system?\n\n"
+	printf "Or maybe filesystem type autodetection went wrong, in which case\n"
+	printf "you should add the rootfstype=... parameter to the kernel command line.\n\n"
+	printf "Available partitions:\n"
+}
+
+do_mount_root() {
+	mkdir $newroot
+	[ -n "$rootflags" ] && rootflags="$rootflags,"
+	rootflags="$rootflags$ro"
+
+	case "$root" in
+		/dev/*    ) device=$root ;;
+		UUID=*    ) eval $root; device="/dev/disk/by-uuid/$UUID" ;;
+		PARTUUID=*) eval $root; device="/dev/disk/by-partuuid/$PARTUUID" ;;
+		LABEL=*   ) eval $root; device="/dev/disk/by-label/$LABEL" ;;
+		""        ) echo "No root device specified." ; problem ;;
+	esac
+
+	while [ ! -b "$device" ] ; do
+		no_device $device
+		problem
+	done
+
+	if ! mount -n -t "$rootfstype" -o "$rootflags" "$device" $newroot ; then
+		no_mount $device
+		cat /proc/partitions
+		while true ; do sleep 10000 ; done
+	fi
+}
+
+do_boot_live() {
+	mkdir $newroot
+	modprobe loop
+	
+	MEDIA=/dev/disk/by-label/LIVECD
+	MEDIUM=/run/initramfs/medium
+	SYSTEM=/run/initramfs/system
+	WRITEDIR=/run/initramfs/overlayfs/write
+	WORKDIR=/run/initramfs/overlayfs/work
+	sfsimg=/run/initramfs/medium/rootfs/filesystem.sfs
+	delay=${delay:-5}
+	
+	mkdir -p $MEDIUM $SYSTEM $WRITEDIR $WORKDIR
+	
+	if [ ! -e $MEDIA ]; then
+		msg "wait $delay seconds..."
+		sleep $delay
+		if [ ! -e $MEDIA ]; then
+			msg "media is not appeared even after wait $delay seconds..."
+			msg "try increase delay by append 'delay=<seconds>' to boot cmdline"
+			sleep 9999
+		fi
+	fi
+	
+	mount -o ro $MEDIA $MEDIUM || problem
+	sfs_dev=$(losetup --find --show --read-only $sfsimg)
+	mount -o defaults -r $sfs_dev $SYSTEM || problem
+	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $newroot || problem
+	
+	# Tell system to skip fsck during startup
+	> $newroot/fastboot
+}
+
+do_try_resume() {
+	case "$resume" in
+		UUID=* ) eval $resume; resume="/dev/disk/by-uuid/$UUID"  ;;
+		LABEL=*) eval $resume; resume="/dev/disk/by-label/$LABEL" ;;
+	esac
+
+	if $noresume || ! [ -b "$resume" ]; then return; fi
+
+	ls -lH "$resume" | ( read x x x x maj min x
+		echo -n ${maj%,}:$min > /sys/power/resume )
+}
+
+init=/sbin/init
+root=
+newroot=/.root
+rootdelay=
+rootfstype=auto
+ro="ro"
+rootflags=
+device=
+resume=
+noresume=false
+
+mount -t proc proc /proc -o nosuid,noexec,nodev
+mount -t sysfs sys /sys -o nosuid,noexec,nodev
+mount -t devtmpfs dev /dev -o mode=0755,nosuid
+mount -t tmpfs run /run -o nosuid,nodev,mode=0755
+
+read -r cmdline < /proc/cmdline
+
+for param in $cmdline ; do
+	case $param in
+		init=*      ) init=${param#init=}             ;;
+		root=*      ) root=${param#root=}             ;;
+		rootdelay=* ) rootdelay=${param#rootdelay=}   ;;
+		rootfstype=*) rootfstype=${param#rootfstype=} ;;
+		rootflags=* ) rootflags=${param#rootflags=}   ;;
+		resume=*    ) resume=${param#resume=}         ;;
+		noresume    ) noresume=true                   ;;
+		ro          ) ro="ro"                         ;;
+		rw          ) ro="rw"                         ;;
+		initrd      ) initrd=true                     ;;
+		live        ) live=true                       ;;
+	esac
+done
+
+# udevd location depends on version
+if [ -x /sbin/udevd ]; then
+	UDEVD=/sbin/udevd
+elif [ -x /lib/udev/udevd ]; then
+	UDEVD=/lib/udev/udevd
+elif [ -x /lib/systemd/systemd-udevd ]; then
+	UDEVD=/lib/systemd/systemd-udevd
+else
+	echo "Cannot find udevd nor systemd-udevd"
+	problem
+fi
+
+${UDEVD} --daemon --resolve-names=never
+udevadm trigger --action=add    --type=subsystems
+udevadm trigger --action=add    --type=devices
+udevadm trigger --action=change --type=devices
+udevadm settle
+
+if [ -f /etc/mdadm.conf ] ; then mdadm -As                       ; fi
+if [ -x /sbin/vgchange  ] ; then /sbin/vgchange -a y > /dev/null ; fi
+if [ -n "$rootdelay"    ] ; then sleep "$rootdelay"              ; fi
+
+if [ "$initrd" = true ]; then
+	shell
+fi
+
+if [ "$live" = true ]; then
+	do_boot_live
+else
+	do_try_resume # This function will not return if resuming from disk
+	do_mount_root
+fi
+
+killall -w ${UDEVD##*/}
+
+mount --move /proc $newroot/proc
+mount --move /sys $newroot/sys
+mount --move /dev $newroot/dev
+mount --move /run $newroot/run
+
+exec switch_root $newroot "$init" "$@"
