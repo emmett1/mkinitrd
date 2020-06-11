@@ -10,6 +10,10 @@ or use DESTDIR for custom location:
 ```
 make DESTDIR=/some/path install
 ```
+
+## Dependencies
+- cpio
+
 ## Usage
 To generate initrd is simply running as root:
 ```
