@@ -64,7 +64,7 @@ do_boot_live() {
 	SYSTEM=/run/initramfs/system
 	WRITEDIR=/run/initramfs/overlayfs/write
 	WORKDIR=/run/initramfs/overlayfs/work
-	sfsimg=/run/initramfs/medium/rootfs/filesystem.sfs
+	sfsimg=$MEDIUM/boot/filesystem.sfs
 	delay=${delay:-5}
 	
 	mkdir -p $MEDIUM $SYSTEM $WRITEDIR $WORKDIR
@@ -86,6 +86,16 @@ do_boot_live() {
 	
 	# Tell system to skip fsck during startup
 	> $newroot/fastboot
+	
+	if [ -d "$MEDIUM"/rootfs ]; then
+		cp -Ra "$MEDIUM"/rootfs/* $newroot
+	fi
+	
+	# Execute custom script before switch root
+	if [ -f $newroot/root/custom_script.sh ]; then
+		chmod +x $newroot/root/custom_script.sh
+		chroot $newroot sh /root/custom_script.sh
+	fi
 }
 
 do_try_resume() {
@@ -129,7 +139,7 @@ for param in $cmdline ; do
 		noresume    ) noresume=true                   ;;
 		ro          ) ro="ro"                         ;;
 		rw          ) ro="rw"                         ;;
-		initrd      ) initrd=true                     ;;
+		shell       ) shell=true                      ;;
 		live        ) live=true                       ;;
 	esac
 done
@@ -156,7 +166,8 @@ if [ -f /etc/mdadm.conf ] ; then mdadm -As                       ; fi
 if [ -x /sbin/vgchange  ] ; then /sbin/vgchange -a y > /dev/null ; fi
 if [ -n "$rootdelay"    ] ; then sleep "$rootdelay"              ; fi
 
-if [ "$initrd" = true ]; then
+if [ "$shell" = true ]; then
+	echo "shell requested, drop to shell"
 	shell
 fi
 

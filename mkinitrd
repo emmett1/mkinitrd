@@ -143,8 +143,11 @@ if [ ! -d "/lib/modules/$1" ] ; then
 	exit 1
 fi
 
-if [ ! $(type -p cpio) ]; then
-	echo "'cpio' not found"
+CPIO=$(type -p cpio)
+CPIO=$(type -p bsdcpio)
+
+if [ ! "$CPIO" ]; then
+	echo "Either 'cpio' nor 'bsdcpio' not found"
 	exit 1
 fi
 
@@ -166,12 +169,14 @@ add_file $DATADIR/$INITIN init 755
 
 # add required binaries
 for b in bash sh cat cp killall ls mkdir mount umount sed awk sleep ln rm setsid \
-	uname readlink basename modprobe blkid switch_root depmod kmod lsmod insmod; do
+	uname readlink basename modprobe blkid switch_root depmod kmod lsmod insmod chroot chmod; do
 	add_binary $b
 done
 
-# add dirs
-add_dir /etc/modprobe.d/
+# add modprobe.d dir
+if [ -d /etc/modprobe.d/ ]; then
+	add_dir /etc/modprobe.d/
+fi
 
 # add required terminfo
 add_file /usr/share/terminfo/l/linux
@@ -231,7 +236,7 @@ done
 
 finalize_modules
 
-( cd $INITRDDIR ; find . | cpio -o -H newc --quiet | gzip -9 ) > $INITRD
+( cd $INITRDDIR ; find . | $CPIO -o -H newc --quiet | gzip -9 ) > $INITRD
 
 # Remove the temporary directories
 rm -rf $INITRDDIR
