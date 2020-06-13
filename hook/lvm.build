@@ -1,0 +1,8 @@
+# build hook for lvm
+
+for i in lvm dmsetup lvchange lvrename lvrename lvextend lvcreate lvdisplay lvscan \
+	pvchange pvck pvcreate pvdisplay pvscan \
+	vgchange vgcreate vgscan vgrename vgck; do
+	add_binary $i
+done
+add_dir /etc/lvm

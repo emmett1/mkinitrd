@@ -1,0 +1,49 @@
+# run hook for livecd only execute when $root is empty
+
+# if root is set, mean not live boot
+[ "$root" ] && return
+
+mkdir $newroot
+
+modprobe loop
+modprobe cdrom
+modprobe overlay
+
+LIVECDLABEL=LIVECD
+MEDIA=/dev/disk/by-label/$LIVECDLABEL
+MEDIUM=/run/initramfs/medium
+SYSTEM=/run/initramfs/system
+WRITEDIR=/run/initramfs/overlayfs/write
+WORKDIR=/run/initramfs/overlayfs/work
+sfsimg=$MEDIUM/boot/filesystem.sfs
+livedelay=${livedelay:-5}
+
+if [ ! -e $MEDIA ]; then
+	msg "wait $delay seconds..."
+	sleep $delay
+	if [ ! -e $MEDIA ]; then
+		msg "media is not appeared even after wait $delay seconds..."
+		msg "try increase delay by append 'livedelay=<seconds>' to boot cmdline"
+		sleep 99999
+	fi
+fi
+
+mkdir -p $MEDIUM $SYSTEM $WRITEDIR $WORKDIR
+
+mount -o ro $MEDIA $MEDIUM || problem
+sfs_dev=$(losetup --find --show --read-only $sfsimg) || problem
+mount -o defaults -r $sfs_dev $SYSTEM || problem
+mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $newroot || problem
+
+# tell system to skip fsck during startup
+> $newroot/fastboot
+
+if [ -d "$MEDIUM"/rootfs ]; then
+	cp -Ra "$MEDIUM"/rootfs/* $newroot
+fi
+
+# execute custom script before switch root
+if [ -f $newroot/root/custom_script.sh ]; then
+	chmod +x $newroot/root/custom_script.sh
+	chroot $newroot sh /root/custom_script.sh
+fi

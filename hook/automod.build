@@ -1,0 +1,6 @@
+# build hook autodetect currently loaded modules to include into initrd
+
+for mod in /sys/module/*; do
+	mod=$(basename $mod)
+	modinfo -k $KERNEL $mod &>/dev/null && add_module $mod
+done

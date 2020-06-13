@@ -1,0 +1,11 @@
+# build hook for livecd
+
+add_binary /lib/udev/cdrom_id
+add_binary blockdev
+add_binary losetup
+
+add_file /lib/udev/rules.d/60-cdrom_id.rules
+
+add_module cdrom
+add_module loop
+add_module overlay

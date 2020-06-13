@@ -1,0 +1,12 @@
+# build hook to include kernel modules
+
+# kernel modules
+for mod in kernel/crypto kernel/fs kernel/lib kernel/drivers/block kernel/drivers/ata kernel/drivers/md \
+	kernel/drivers/firewire kernel/drivers/input kernel/drivers/scsi kernel/drivers/message \
+	kernel/drivers/pcmcia kernel/drivers/virtio kernel/drivers/hid kernel/drivers/usb/host kernel/drivers/usb/storage; do
+	FTGT="$FTGT /lib/modules/$KERNEL/$mod"
+done
+for m in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
+	m=$(echo ${m%*.ko*})
+	add_module $(basename $m)
+done

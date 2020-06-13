@@ -1,0 +1,18 @@
+# build hook to include udev stuffs
+
+add_file /etc/udev/udev.conf
+add_file /lib/udev/rules.d/50-udev-default.rules
+add_file /lib/udev/rules.d/60-persistent-storage.rules
+add_file /lib/udev/rules.d/64-btrfs.rules
+add_file /lib/udev/rules.d/80-drivers.rules
+add_binary udevadm
+add_binary udevd
+add_binary /lib/udev/ata_id
+add_binary /lib/udev/scsi_id
+
+# Add udevd if not in PATH
+if [ -x /lib/udev/udevd ] ; then
+	add_binary /lib/udev/udevd
+elif [ -x /lib/systemd/systemd-udevd ] ; then
+	add_binary /lib/systemd/systemd-udevd
+fi

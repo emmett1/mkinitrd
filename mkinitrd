@@ -7,14 +7,14 @@ add_file() {
 	if [ -f $1 ]; then
 		file=$1
 	else
-		echo "missing file: $1"
+		msgwarn "missing file: $1"
 		return
 	fi
 	if [ -L $file ]; then
 		add_file $(readlink -f $file)
 	fi
 	if [ "${file:0:1}" != "/" ]; then
-		echo "absolute source path needed: $file"
+		msgerr "absolute source path needed: $file"
 		return
 	fi
 	if [ "$2" ]; then
@@ -23,17 +23,16 @@ add_file() {
 		dest=${file/\//}
 	fi
 	if [ "${dest:0:1}" = "/" ]; then
-		echo "destination path must without leading '/': $dest"
+		msgerr "destination path must without leading '/': $dest"
 		return
 	fi
 	mode=${3:-$(stat -c %a "$file")}
 	if [ ! "$mode" ]; then
-		echo "failed get file mode: $file"
+		msgerr "failed get file mode: $file"
 		return
 	fi	
 	install -Dm$mode $file $INITRDDIR/$dest
 }
-	
 
 add_binary() {
 	# add_binary binary
@@ -41,7 +40,7 @@ add_binary() {
 	[ "$1" ] || return
 	bin=$(type -p $1)
 	if [ ! "$bin" ]; then
-		echo "missing bin: $1"
+		msgwarn "missing binary: $1"
 		return
 	fi
 	if [ -x $INITRDDIR/$bin ]; then
@@ -54,7 +53,7 @@ add_binary() {
 		esac
 		lib=$(PATH=/lib:/lib64:/usr/lib type -p $i)
 		if [ ! "$lib" ]; then
-			echo "missing lib: $i"
+			msgwarn "missing library: $i"
 			continue
 		fi
 		if [ -e $INITRDDIR/$lib ]; then
@@ -74,14 +73,14 @@ add_module() {
 		modpath=$(modinfo -k $KERNEL -F filename $1 | cut -d ' ' -f1 | head -n1)
 		[ "$modpath" = "name:" ] && return 0
 	else
-		echo "missing module: $1"
+		msgwarn "missing module: $1"
 		return
 	fi
 	[ -f $INITDIR/lib/modules/$KERNEL/kernel/$(basename $modpath) ] && return
 	add_file "$modpath" lib/modules/$KERNEL/kernel/$(basename $modpath)
 	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
-			echo "missing firmware for $modname: $line"
+			msgwarn "missing firmware for $modname: $line"
 		else
 			add_file /lib/firmware/$line
 		fi
@@ -108,7 +107,7 @@ add_dir() {
 	[ "$1" ] || return
 	source=$1
 	if [ ! -d $source ]; then
-		echo "directory not exist: $source"
+		msgerr "directory not exist: $source"
 		return
 	fi
 	if [ $2 ]; then
@@ -125,39 +124,198 @@ make_dir() {
 	local path=$1 mode=${2:-755}
 	[ "$path" ] || return
 	if [ ${path:0:1} = / ]; then
-		echo "path should not leading '/': $path"
+		msgerr "path should not leading '/': $path"
 		return
 	fi
 	install -dm$mode $INITRDDIR/$path
 }
 
-if [ $1 ] ; then
-	KERNEL=$1
-else
-	KERNEL=$(uname -r)
-fi
-INITRD=/boot/initrd-$KERNEL.img
+usage() {	
+	cat << EOF
+Usage:
+  $(basename $0) [option] [argument]
+  
+Options:
+  -k <version>  custom kernel version (default: $KERNEL)
+  -o <output>   custom output name (default: $INITRAMFS)
+  -i <init>     custom init file (default: $INITIN)
+  -m <modules>  add extra modules (comma separated)
+  -b <binaries  add extra binary (comma separated)
+  -f <file>     add extra file (comma separated & absolute path)
+  -c <config>   use custom config (default: $CONFIG)
+  -A <hook>     add extra hook (comma separated, precedence over -a, -s & HOOKS)
+  -a <hook>     add extra hook (comma separated, precedence over -s & after HOOKS)
+  -s <hook>     skip hook defined in HOOKS (comma separated)
+  -q            quiet mode
+  -h            print this help msg
 
-if [ ! -d "/lib/modules/$1" ] ; then
-	echo "No modules directory named $1"
+EOF
+}
+
+needarg() {
+	if [ ! "$1" ]; then
+		echo "ERROR: argument is needed for this option!"
+		exit 1
+	fi
+}		
+
+parse_opt() {
+	while [ $1 ]; do
+		case $1 in
+			-k) needarg $2
+			    KERNEL=$2
+			    shift ;;
+			-o)	needarg $2
+			    OUTPUT=$2
+			    shift ;;
+			-i)	needarg $2
+			    INITIN=$2
+			    shift ;;
+			-c)	needarg $2
+			    CONFIG=$2
+			    shift ;;
+			-A)	needarg $2
+			    IFS=, read -r -a ADDEARLYHOOKS <<< $2
+			    shift ;;
+			-a)	needarg $2
+			    IFS=, read -r -a ADDHOOKS <<< $2
+			    shift ;;
+			-s)	needarg $2
+			    IFS=, read -r -a SKIPHOOKS <<< $2
+			    shift ;;
+			-m) needarg $2
+			    IFS=, read -r -a ADDMODULES <<< $2
+			    shift ;;
+			-b) needarg $2
+			    IFS=, read -r -a ADDBINARIES <<< $2
+			    shift ;;
+			-f) needarg $2
+			    IFS=, read -r -a ADDFILES <<< $2
+			    shift ;;
+			-q)	QUIET=1 ;;
+			-h)	usage; exit 0 ;;
+			*)  msgerr "Invalid option '$1'"
+			    exit 1 ;;
+		esac
+		shift
+	done
+}
+
+cleanup() {
+	rm -fr "$INITRDDIR"
+}
+
+interrupted() {
+	cleanup
 	exit 1
-fi
+}
+
+echo() {
+	[ "$QUIET" ] && return
+	command echo "$*"
+}
+
+msg() {
+	echo ":: $*"
+}
+
+msgwarn() {
+	echo "WARNING: $*"
+}
+
+msgerr() {
+	echo "ERROR: $*"
+}
+
+KERNEL=$(uname -r)
+DATADIR=/usr/share/mkinitrd
+INITIN=init
+HOOKDIR=/etc/mkinitrd.d
+CONFFILE=/etc/mkinitrd.conf
+INITRD=initrd-$KERNEL.img
 
 CPIO=$(type -p cpio)
 CPIO=$(type -p bsdcpio)
 
-if [ ! "$CPIO" ]; then
-	echo "Either 'cpio' nor 'bsdcpio' not found"
+parse_opt $@
+
+if [ "$UID" != "0" ]; then
+	msgerr "need root access!"
 	exit 1
 fi
 
-DATADIR=/usr/share/mkinitrd
-INITIN=init
+if [ ! -d "/lib/modules/$KERNEL" ] ; then
+	msgerr "No modules directory named $KERNEL"
+	exit 1
+fi
+
+if [ ! "$CPIO" ]; then
+	msgerr "Either 'cpio' nor 'bsdcpio' not found"
+	exit 1
+fi
+
+if [ ! -f "$CONFFILE" ]; then
+	msgerr "Config file not found: $CONFFILE"
+	exit 1
+else
+	. "$CONFFILE"
+fi
+
+if [ "$OUTPUT" ]; then
+	if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
+		msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist."
+		exit 1
+	elif [ -d "$OUTPUT" ]; then
+		msgerr "'$OUTPUT' is a directory."
+		exit 1
+	fi
+	INITRD="$OUTPUT"
+fi
+
+# filter out skip hooks (-s)
+if [ "${#SKIPHOOKS[@]}" -gt 0 ] && [ "${#HOOKS[@]}" -gt 0 ]; then
+	for s in ${!SKIPHOOKS[@]}; do
+		for h in ${!HOOKS[@]}; do
+			if [ "${SKIPHOOKS[s]}" = "${HOOKS[h]}" ]; then
+				unset 'HOOKS[h]'
+				break
+			fi
+		done
+	done
+fi
+
+# add extra hooks (-a)
+if [ "${#ADDHOOKS[@]}" -gt 0 ]; then
+	HOOKS+=(${ADDHOOKS[@]})
+fi
+
+# add extra early hooks (-A)
+if [ "${#ADDEARLYHOOKS[@]}" -gt 0 ]; then
+	ADDEARLYHOOKS+=(${HOOKS[@]})
+	HOOKS=(${ADDEARLYHOOKS[@]})
+fi
+
+# add extra modules (-m)
+if [ "${#ADDMODULES[@]}" -gt 0 ]; then
+	MODULES+=(${ADDMODULES[@]})
+fi
+
+# add extra files (-f)
+if [ "${#ADDFILES[@]}" -gt 0 ]; then
+	FILES+=(${ADDFILES[@]})
+fi
+
+# add extra binary (-b)
+if [ "${#ADDBINARIES[@]}" -gt 0 ]; then
+	BINARIES+=(${ADDBINARIES[@]})
+fi
+
+trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
 
 # create a temporary working directory
 INITRDDIR=$(mktemp -d /tmp/initrd-work.XXXXXXXXXX)
 
-echo "Creating $INITRD... "
+echo "Generating initrd... "
 
 # make required dirs
 for d in dev run sys proc; do
@@ -167,81 +325,52 @@ done
 # add the init file
 add_file $DATADIR/$INITIN init 755
 
-# add required binaries
-for b in bash sh cat cp killall ls mkdir mount umount sed awk sleep ln rm setsid \
-	uname readlink basename modprobe blkid switch_root depmod kmod lsmod insmod chroot chmod; do
-	add_binary $b
+# run hook
+for hook in ${HOOKS[@]}; do
+	# run build hook
+	if [ -f "$HOOKDIR/$hook.build" ]; then
+		msg "running build hook: $hook"
+		. $HOOKDIR/$hook.build
+	fi
+	# add run & cleanup hook and list the order
+	if [ -f "$HOOKDIR/$hook.run" ]; then
+		add_file $HOOKDIR/$hook.run
+		echo $hook >> $INITRDDIR/runhook.order
+	fi
+	if [ -f "$HOOKDIR/$hook.cleanup" ]; then
+		add_file $HOOKDIR/$hook.cleanup
+		echo $hook >> $INITRDDIR/cleanuphook.order
+	fi
 done
 
-# add modprobe.d dir
-if [ -d /etc/modprobe.d/ ]; then
-	add_dir /etc/modprobe.d/
-fi
-
-# add required terminfo
-add_file /usr/share/terminfo/l/linux
-
-# udev
-if [ -f /etc/udev/udev.conf ]; then
-	add_file /etc/udev/udev.conf
-	add_dir /lib/udev/rules.d
-	add_dir /etc/udev/rules.d/
-	add_binary udevadm
-	add_binary udevd
-	add_binary /lib/udev/ata_id
-	add_binary /lib/udev/scsi_id
-	# Add udevd if not in PATH
-	if [ -x /lib/udev/udevd ] ; then
-		add_binary /lib/udev/udevd
-	elif [ -x /lib/systemd/systemd-udevd ] ; then
-		add_binary /lib/systemd/systemd-udevd
-	fi
-fi
-
-# LVM
-if [ $(type -p lvm) ]; then
-	for i in lvm dmsetup lvchange lvrename lvrename lvextend lvcreate lvdisplay lvscan \
-		pvchange pvck pvcreate pvdisplay pvscan \
-		vgchange vgcreate vgscan vgrename vgck; do
-		add_binary $i
+if [ "${#BINARIES[@]}" -gt 0 ]; then
+	msg "adding extra binaries..."
+	for b in ${BINARIES[@]}; do
+		add_binary "$b"
 	done
-	add_dir /etc/lvm
 fi
 
-# systemd
-for dir in /lib/systemd /lib/elogind; do
-	if [ -d $dir ]; then
-		add_dir $dir
-	fi
-done
+if [ "${#MODULES[@]}" -gt 0 ]; then
+	msg "adding extra modules..."
+	for m in ${MODULES[@]}; do
+		add_module "$m"
+	done
+fi
 
-# for livecd
-add_binary /lib/udev/cdrom_id
-add_binary blockdev
-add_binary losetup
-add_module cdrom
-add_module loop
-add_module overlay
-
-# kernel modules
-for mod in kernel/crypto kernel/fs kernel/lib kernel/drivers/block kernel/drivers/ata kernel/drivers/md \
-	kernel/drivers/firewire kernel/drivers/input kernel/drivers/scsi kernel/drivers/message \
-	kernel/drivers/pcmcia kernel/drivers/virtio kernel/drivers/hid kernel/drivers/usb/host kernel/drivers/usb/storage; do
-	FTGT="$FTGT /lib/modules/$KERNEL/$mod"
-done
-for m in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
-	m=$(echo ${m%*.ko*})
-	add_module $(basename $m)
-done
+if [ "${#FILES[@]}" -gt 0 ]; then
+	msg "adding extra files..."
+	for f in ${FILES[@]}; do
+		add_file "$f"
+	done
+fi
 
 finalize_modules
 
-( cd $INITRDDIR ; find . | $CPIO -o -H newc --quiet | gzip -9 ) > $INITRD
+( cd $INITRDDIR ; find . | LANG=C $CPIO -o -H newc --quiet | gzip -9 ) > $INITRD
 
 # Remove the temporary directories
-rm -rf $INITRDDIR
+cleanup
 
-size=$(du -sh $INITRD | awk '{print $1}')
-echo "done ($size)"
+echo "Generating initrd done: $INITRD ($(du -sh $INITRD | awk '{print $1}'))"
 
 exit 0

@@ -1,0 +1,3 @@
+# cleanup hook for udev
+udevadm control --exit
+udevadm info --cleanup-db

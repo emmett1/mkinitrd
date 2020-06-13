@@ -1,0 +1,15 @@
+# build hook for basic binaries, directories, files and stuff
+
+# basic binaries
+for b in bash sh cat cp killall ls mkdir mount umount sed awk sleep ln rm setsid mountpoint tac \
+	uname readlink basename modprobe blkid switch_root depmod kmod lsmod insmod chroot chmod; do
+	add_binary $b
+done
+
+# add modprobe.d dir
+if [ -d /etc/modprobe.d/ ]; then
+	add_dir /etc/modprobe.d/
+fi
+
+# add required terminfo
+add_file /usr/share/terminfo/l/linux
