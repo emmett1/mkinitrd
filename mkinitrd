@@ -165,22 +165,22 @@ parse_opt() {
 			-k) needarg $2
 			    KERNEL=$2
 			    shift ;;
-			-o)	needarg $2
+			-o) needarg $2
 			    OUTPUT=$2
 			    shift ;;
-			-i)	needarg $2
+			-i) needarg $2
 			    INITIN=$2
 			    shift ;;
-			-c)	needarg $2
+			-c) needarg $2
 			    CONFIG=$2
 			    shift ;;
-			-A)	needarg $2
+			-A) needarg $2
 			    IFS=, read -r -a ADDEARLYHOOKS <<< $2
 			    shift ;;
-			-a)	needarg $2
+			-a) needarg $2
 			    IFS=, read -r -a ADDHOOKS <<< $2
 			    shift ;;
-			-s)	needarg $2
+			-s) needarg $2
 			    IFS=, read -r -a SKIPHOOKS <<< $2
 			    shift ;;
 			-m) needarg $2
@@ -192,9 +192,9 @@ parse_opt() {
 			-f) needarg $2
 			    IFS=, read -r -a ADDFILES <<< $2
 			    shift ;;
-			-q)	QUIET=1 ;;
-			-h)	usage; exit 0 ;;
-			*)  msgerr "Invalid option '$1'"
+			-q) QUIET=1 ;;
+			-h) usage; exit 0 ;;
+			 *) msgerr "Invalid option '$1'"
 			    exit 1 ;;
 		esac
 		shift
